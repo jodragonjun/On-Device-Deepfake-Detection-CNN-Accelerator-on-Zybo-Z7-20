@@ -82,10 +82,11 @@ Vivado Synthesis / Implementation
         |
         v
 Zybo Z7-20 FPGA Deployment
+```
 
 ---
 
-Hardware Architecture
+## Hardware Architecture
 
 The CNN inference engine is designed as a hierarchical hardware pipeline.
 Input Image ( PS )
@@ -111,7 +112,7 @@ Verilog-2001 coding rules.
 
 ---
 
-Verification Strategy
+## Verification Strategy
 
 The RTL design is verified using a Python golden-reference flow.
 
@@ -140,7 +141,7 @@ total err count      = 0
 
 ---
 
-Design Philosophy
+## Design Philosophy
 
 This project is not a simple neural network demo.
 
@@ -160,7 +161,7 @@ Future extensibility toward pipelined inference
 
 ---
 
-Final Goal
+## Final Goal
 
 The final goal of this project is to build a complete FPGA-based deepfake
 detection accelerator that performs CNN inference on Zybo Z7-20 using weights
