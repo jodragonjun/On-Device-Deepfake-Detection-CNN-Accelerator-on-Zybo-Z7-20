@@ -1,7 +1,7 @@
 # Deepfake Detection Accelerator on Zybo Z7-20
 
 > From Python-trained CNN to Verilog RTL:  
-> Hardware implementation of a WildDeepfake-based deepfake detector on FPGA**
+> Hardware implementation of a WildDeepfake-based deepfake detector on FPGA
 
 ---
 
