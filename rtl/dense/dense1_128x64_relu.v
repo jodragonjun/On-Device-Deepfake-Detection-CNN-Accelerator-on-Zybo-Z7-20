@@ -109,7 +109,6 @@ always @(posedge clk or posedge rst) begin
         rd_idx <= 8'd0;
         mac_count <= 7'd0;
         feature_rd_addr <= 7'd0;
-        feature_dout <= 64'sd0;
 
         neuron_idx <= 6'd0;
         weight_addr <= 13'd0;
