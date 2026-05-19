@@ -49,7 +49,7 @@ This project explores that problem from a digital hardware design perspective:
 |---|---|
 | Board | Digilent Zybo Z7-20 |
 | FPGA SoC | Xilinx Zynq-7000 XC7Z020 |
-| HDL | Verilog-2002 |
+| HDL | Verilog-2001 |
 | Toolchain | Xilinx Vivado |
 | Dataset | WildDeepfake |
 | Task | Real / Fake classification |
