@@ -108,7 +108,6 @@ always @(posedge clk or posedge rst) begin
         rd_idx <= 7'd0;
         mac_count <= 6'd0;
         hidden_rd_addr <= 6'd0;
-        hidden_dout <= 64'sd0;
         weight_addr <= 6'd0;
 
         acc <= 96'sd0;
