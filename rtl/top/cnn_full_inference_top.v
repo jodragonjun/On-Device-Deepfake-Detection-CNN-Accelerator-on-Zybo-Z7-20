@@ -13,7 +13,6 @@ module cnn_full_inference_top (
     start,
 
     final_valid,
-    final_logit,
     final_pred,
     final_done,
 
@@ -34,13 +33,15 @@ input signed [15:0] img_wr_b;
 input start;
 
 output final_valid;
-output signed [95:0] final_logit;
 output final_pred;
 output final_done;
 
 output feature_busy;
 output feature_done;
 output tail_busy;
+
+//for debug final logit
+wire signed [95:0] final_logit;
 
 //////////////////////////////////////////////////
 // start pulse
