@@ -1,24 +1,46 @@
+`timescale 1ns/1ps
+
 module conv1_top (
-    input clk,
-    input rst,
-    input start,
+    clk,
+    rst,
+    start,
 
-    input signed [15:0] r00, r01, r02,
-    input signed [15:0] r10, r11, r12,
-    input signed [15:0] r20, r21, r22,
+    r00, r01, r02,
+    r10, r11, r12,
+    r20, r21, r22,
 
-    input signed [15:0] g00, g01, g02,
-    input signed [15:0] g10, g11, g12,
-    input signed [15:0] g20, g21, g22,
+    g00, g01, g02,
+    g10, g11, g12,
+    g20, g21, g22,
 
-    input signed [15:0] b00, b01, b02,
-    input signed [15:0] b10, b11, b12,
-    input signed [15:0] b20, b21, b22,
+    b00, b01, b02,
+    b10, b11, b12,
+    b20, b21, b22,
 
-    output signed [31:0] out,
-    output valid_out,
-    output done
+    out,
+    valid_out,
+    done
 );
+
+input clk;
+input rst;
+input start;
+
+input signed [15:0] r00, r01, r02;
+input signed [15:0] r10, r11, r12;
+input signed [15:0] r20, r21, r22;
+
+input signed [15:0] g00, g01, g02;
+input signed [15:0] g10, g11, g12;
+input signed [15:0] g20, g21, g22;
+
+input signed [15:0] b00, b01, b02;
+input signed [15:0] b10, b11, b12;
+input signed [15:0] b20, b21, b22;
+
+output signed [31:0] out;
+output valid_out;
+output done;
 
 wire [5:0] out_ch;
 wire [1:0] in_ch;
@@ -82,10 +104,16 @@ wire signed [31:0] p2;
 wire signed [31:0] p3;
 wire pe_valid;
 
-wire signed [31:0] acc_out;
+/*
+    acc_out은 이제 Q8.8이 아니라 Q16.16 raw accumulation.
+*/
+wire signed [47:0] acc_out;
 wire acc_valid;
 
-wire signed [31:0] acc_bias;
+wire signed [47:0] bias_aligned;
+wire signed [47:0] acc_bias_raw;
+wire signed [47:0] shifted_acc_bias;
+
 wire signed [31:0] relu_out;
 wire relu_valid;
 
@@ -118,7 +146,7 @@ assign lane3 = (k_idx != 4'd8);
    PE input
    weight_rom_conv1은 synchronous ROM.
    따라서 pixel selector 출력은 sel_d1으로 1클럭 delay.
-   하지만 valid는 mac_en을 그대로 사용해야 함.
+   valid는 mac_en을 그대로 사용.
    ============================================================ */
 assign pe_a0 = sel0_d1;
 assign pe_a1 = sel1_d1;
@@ -133,17 +161,33 @@ assign pe_b3 = lane3_d1 ? w3 : 16'sd0;
 assign pe_input_valid = mac_en;
 
 /* ============================================================
-   bias timing
-   bias ROM도 synchronous ROM.
-   acc_rst 이후 1클럭 뒤 bias_reg에 고정.
-   ============================================================ */
-assign acc_bias = acc_out + {{16{bias_reg[15]}}, bias_reg};
+   bias timing / final shift
+   ============================================================
+
+   PE 출력:
+       p = input(Q8.8) * weight(Q8.8)
+         = Q16.16 raw product
+
+   accumulator 출력:
+       acc_out = sum(raw product)
+               = Q16.16
+
+   bias:
+       bias_reg = Q8.8
+
+   따라서 bias를 Q16.16으로 맞추기 위해 << 8.
+   그 후 마지막에 >>> 8 해서 Q8.8로 복귀.
+*/
+assign bias_aligned    = {{24{bias_reg[15]}}, bias_reg, 8'd0};
+assign acc_bias_raw    = acc_out + bias_aligned;
+assign shifted_acc_bias = acc_bias_raw >>> 8;
 
 always @(posedge clk or posedge rst) begin
     if (rst) begin
         acc_rst_d1 <= 1'b0;
         bias_reg   <= 16'sd0;
-    end else begin
+    end
+    else begin
         acc_rst_d1 <= acc_rst;
 
         if (acc_rst_d1) begin
@@ -155,16 +199,18 @@ end
 /* ============================================================
    ReLU input timing
    accumulator가 최종 누산 완료를 알리는 acc_valid 기준.
+   acc_valid가 뜬 다음 cycle에 acc_out이 안정된 상태로 캡처됨.
    ============================================================ */
 always @(posedge clk or posedge rst) begin
     if (rst) begin
         acc_valid_d1 <= 1'b0;
         relu_in_reg  <= 32'sd0;
-    end else begin
+    end
+    else begin
         acc_valid_d1 <= acc_valid;
 
         if (acc_valid) begin
-            relu_in_reg <= acc_bias;
+            relu_in_reg <= shifted_acc_bias[31:0];
         end
     end
 end
@@ -301,7 +347,8 @@ always @(posedge clk or posedge rst) begin
         lane1_d1 <= 1'b0;
         lane2_d1 <= 1'b0;
         lane3_d1 <= 1'b0;
-    end else begin
+    end
+    else begin
         sel0_d1 <= sel0;
         sel1_d1 <= sel1;
         sel2_d1 <= sel2;

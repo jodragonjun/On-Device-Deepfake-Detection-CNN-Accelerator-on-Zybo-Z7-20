@@ -15,7 +15,6 @@ module cnn_full_inference_top (
     final_valid,
     final_pred,
     final_done,
-
     feature_busy,
     feature_done,
     tail_busy
@@ -35,6 +34,7 @@ input start;
 output final_valid;
 output final_pred;
 output final_done;
+//output wire signed [95:0] final_logit;
 
 output feature_busy;
 output feature_done;

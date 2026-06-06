@@ -1,17 +1,32 @@
+`timescale 1ns/1ps
+
 module conv2_top (
-    input clk,
-    input rst,
-    input start,
+    clk,
+    rst,
+    start,
 
-    input valid_in,
-    input signed [31:0] in_data,
-    input [5:0] in_ch,
-    input [3:0] k_idx,
+    valid_in,
+    in_data,
+    in_ch,
+    k_idx,
 
-    output reg signed [31:0] out,
-    output reg valid_out,
-    output reg done
+    out,
+    valid_out,
+    done
 );
+
+input clk;
+input rst;
+input start;
+
+input valid_in;
+input signed [31:0] in_data;
+input [5:0] in_ch;
+input [3:0] k_idx;
+
+output reg signed [31:0] out;
+output reg valid_out;
+output reg done;
 
 parameter IDLE      = 4'd0;
 parameter CAPTURE   = 4'd1;
@@ -75,11 +90,25 @@ wire signed [47:0] p2;
 wire signed [47:0] p3;
 
 reg acc_rst;
-wire signed [47:0] acc_out;
+
+/*
+    conv2_accumulator 수정 후 acc_out은 64-bit raw accumulation.
+    의미:
+        p0~p3  = Q16.16 raw product
+        acc_out = sum(raw product) = Q16.16
+*/
+wire signed [63:0] acc_out;
 wire acc_valid;
 
-wire signed [47:0] bias_ext;
-wire signed [47:0] acc_bias;
+/*
+    bias_reg는 Q8.8.
+    raw acc는 Q16.16.
+    따라서 bias_reg를 << 8 해서 Q16.16으로 맞춘 뒤 더함.
+    마지막에 >>> 8 해서 Q8.8로 복귀.
+*/
+wire signed [63:0] bias_aligned;
+wire signed [63:0] acc_bias_raw;
+wire signed [63:0] shifted_acc_bias;
 
 integer i;
 
@@ -129,10 +158,11 @@ assign pe_b3 = w3;
 assign pe_valid_in = (state == FEED_PE);
 
 /* ============================================================
-   bias + ReLU input
+   bias align + final shift
    ============================================================ */
-assign bias_ext = {{32{bias_reg[15]}}, bias_reg};
-assign acc_bias = acc_out + bias_ext;
+assign bias_aligned     = {{40{bias_reg[15]}}, bias_reg, 8'd0};
+assign acc_bias_raw     = acc_out + bias_aligned;
+assign shifted_acc_bias = acc_bias_raw >>> 8;
 
 /* ============================================================
    ROM
@@ -232,7 +262,8 @@ always @(posedge clk or posedge rst) begin
         for (i = 0; i < 288; i = i + 1) begin
             win_buf[i] <= 32'sd0;
         end
-    end else begin
+    end
+    else begin
         acc_rst <= 1'b0;
         valid_out <= 1'b0;
         done <= 1'b0;
@@ -258,8 +289,9 @@ always @(posedge clk or posedge rst) begin
                         out_ch <= 6'd0;
                         group_idx <= 7'd0;
                         state <= LOAD_OC;
-                    end else begin
-                        cap_count <= cap_count + 1'b1;
+                    end
+                    else begin
+                        cap_count <= cap_count + 9'd1;
                     end
                 end
             end
@@ -281,8 +313,9 @@ always @(posedge clk or posedge rst) begin
 
                 if (group_idx == GROUP_LAST) begin
                     state <= WAIT_ACC;
-                end else begin
-                    group_idx <= group_idx + 1'b1;
+                end
+                else begin
+                    group_idx <= group_idx + 7'd1;
                     state <= WAIT_ROM;
                 end
             end
@@ -294,23 +327,29 @@ always @(posedge clk or posedge rst) begin
             end
 
             OUTPUT: begin
-                if (acc_bias < 48'sd0) begin
+                /*
+                    shifted_acc_bias는 다시 Q8.8.
+                    ReLU 적용 후 32-bit output으로 전달.
+                */
+                if (shifted_acc_bias < 64'sd0) begin
                     out <= 32'sd0;
-                end else begin
-                    out <= acc_bias[31:0];
+                end
+                else begin
+                    out <= shifted_acc_bias[31:0];
                 end
 
                 valid_out <= 1'b1;
 
                 if (out_ch == OUT_CH_LAST) begin
                     state <= DONE_ST;
-                end else begin
+                end
+                else begin
                     state <= NEXT_OC;
                 end
             end
 
             NEXT_OC: begin
-                out_ch <= out_ch + 1'b1;
+                out_ch <= out_ch + 6'd1;
                 group_idx <= 7'd0;
                 state <= LOAD_OC;
             end

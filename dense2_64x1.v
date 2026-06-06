@@ -28,22 +28,8 @@ output reg signed [95:0] logit;
 output reg pred;
 output reg done;
 
-/*
-    Keras 기준:
-    sigmoid(score) > 0.5 -> real(1)
-    sigmoid threshold 0.5 == raw logit threshold 0
-
-    따라서 기본 RTL 판정:
-    shifted_logit > 0 -> pred=1(real)
-    shifted_logit <= 0 -> pred=0(fake)
-
-    만약 best threshold 0.459228을 Q8.8 raw-logit으로 쓰고 싶으면:
-    logit_threshold = ln(0.459228 / (1 - 0.459228)) ~= -0.1637
-    Q8.8 threshold ~= -42
-    이 경우 PRED_THRESHOLD_Q8_8 = -42 로 바꾸면 됨.
-*/
 parameter DENSE2_SHIFT = 8;
-parameter PRED_THRESHOLD_Q8_8 = 0;
+parameter PRED_THRESHOLD_Q8_8 = 135;
 
 parameter S_IDLE   = 4'd0;
 parameter S_LOAD   = 4'd1;
@@ -57,6 +43,13 @@ parameter S_DONE   = 4'd8;
 
 reg [3:0] state;
 
+/*
+    64 x 64-bit hidden feature memory.
+
+    Important:
+    Do not write this memory inside an async reset always block.
+    Otherwise Vivado can dissolve it into FFs and large MUX logic.
+*/
 (* ram_style = "block" *) reg signed [63:0] hidden_mem [0:63];
 
 reg [5:0] load_count;
@@ -97,6 +90,13 @@ assign shifted_logit = sum_bias >>> DENSE2_SHIFT;
 
 assign pred_threshold_q8_8 = PRED_THRESHOLD_Q8_8;
 
+/*
+    Hidden memory write control.
+
+    First hidden value can arrive in S_IDLE.
+    Normal loading happens in S_LOAD.
+    After S_DONE, next inference can start immediately if valid_in is asserted.
+*/
 assign hidden_mem_we =
     valid_in &&
     ((state == S_IDLE) || (state == S_LOAD) || (state == S_DONE));
@@ -115,6 +115,10 @@ dense2_bias_rom u_dense2_bias_rom (
     .dout(bias_dout)
 );
 
+/*
+    RAM block.
+    No asynchronous reset here.
+*/
 always @(posedge clk) begin
     if (hidden_mem_we) begin
         hidden_mem[hidden_wr_addr] <= hidden_wr_data;
@@ -145,12 +149,12 @@ always @(posedge clk or posedge rst) begin
     end
     else begin
         valid_out <= 1'b0;
-        done <= 1'b0;
 
         case (state)
 
             S_IDLE: begin
                 busy <= 1'b0;
+                done <= 1'b0;
 
                 if (valid_in) begin
                     busy <= 1'b1;
@@ -217,16 +221,7 @@ always @(posedge clk or posedge rst) begin
             S_BIAS: begin
                 logit_reg <= shifted_logit;
 
-                /*
-                    수정 핵심:
-                    기존: shifted_logit <= 135 이면 real
-                    수정: shifted_logit > threshold 이면 real
-
-                    threshold 기본값 0:
-                    logit > 0  -> real(1)
-                    logit <= 0 -> fake(0)
-                */
-                if (shifted_logit > pred_threshold_q8_8) begin
+                if (shifted_logit <= pred_threshold_q8_8) begin
                     pred_reg <= 1'b1;
                 end
                 else begin
@@ -248,12 +243,10 @@ always @(posedge clk or posedge rst) begin
                 busy <= 1'b0;
 
                 if (valid_in) begin
+                    done <= 1'b0;
                     busy <= 1'b1;
                     load_count <= 6'd1;
                     state <= S_LOAD;
-                end
-                else begin
-                    state <= S_IDLE;
                 end
             end
 

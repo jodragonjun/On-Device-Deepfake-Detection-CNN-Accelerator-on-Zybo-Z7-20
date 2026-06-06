@@ -13,6 +13,7 @@ output reg signed [15:0] dout;
 initial begin
     $readmemh("C:/Xilinx/Vivado/project/capstone/data/dense1_weight.hex", mem);
 end
+
 always @(posedge clk) begin
     dout <= mem[addr];
 end

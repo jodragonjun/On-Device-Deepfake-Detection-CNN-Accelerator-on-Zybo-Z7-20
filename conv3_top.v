@@ -31,18 +31,18 @@ output reg done;
 ////////////////////////////////////////////////////////////
 // State
 ////////////////////////////////////////////////////////////
-parameter S_IDLE    = 4'd0;
-parameter S_CAPTURE = 4'd1;
-parameter S_PREP    = 4'd2;
-parameter S_ISSUE   = 4'd3;
-parameter S_LATCH   = 4'd4;
-parameter S_MUL     = 4'd5;
-parameter S_SUM1    = 4'd6;
-parameter S_SUM2    = 4'd7;
-parameter S_ACC     = 4'd8;
-parameter S_BIAS    = 4'd9;
-parameter S_OUTPUT  = 4'd10;
-parameter S_DONE    = 4'd11;
+parameter S_IDLE      = 4'd0;
+parameter S_CAPTURE   = 4'd1;
+parameter S_PREP      = 4'd2;
+parameter S_ISSUE     = 4'd3;
+parameter S_LATCH     = 4'd4;
+parameter S_MUL       = 4'd5;
+parameter S_SUM1      = 4'd6;
+parameter S_SUM2      = 4'd7;
+parameter S_ACC       = 4'd8;
+parameter S_BIAS      = 4'd9;
+parameter S_OUTPUT    = 4'd10;
+parameter S_DONE      = 4'd11;
 
 ////////////////////////////////////////////////////////////
 // Conv3 parameter
@@ -59,6 +59,21 @@ reg [3:0] state;
 
 ////////////////////////////////////////////////////////////
 // 4-bank window buffer
+//
+// Original linear index:
+//   store_idx = in_ch * 9 + k_idx
+//
+// Since Conv3 MAC always reads four consecutive elements:
+//   elem0 = group_idx*4 + 0
+//   elem1 = group_idx*4 + 1
+//   elem2 = group_idx*4 + 2
+//   elem3 = group_idx*4 + 3
+//
+// Split into 4 banks:
+//   bank0[group_idx] = linear[group_idx*4 + 0]
+//   bank1[group_idx] = linear[group_idx*4 + 1]
+//   bank2[group_idx] = linear[group_idx*4 + 2]
+//   bank3[group_idx] = linear[group_idx*4 + 3]
 ////////////////////////////////////////////////////////////
 (* ram_style = "block" *) reg signed [31:0] win_bank0 [0:143];
 (* ram_style = "block" *) reg signed [31:0] win_bank1 [0:143];
@@ -94,20 +109,8 @@ assign win_we3 = (state == S_CAPTURE) && valid_in && (store_bank == 2'd3);
 reg [6:0] out_ch;
 reg [7:0] group_idx;
 
-/*
-    Conv3 raw-product accumulation.
-
-    pe32x16_comb output:
-        32-bit feature * 16-bit weight = 48-bit Q16.16 raw product
-
-    Conv3 product count:
-        64 * 3 * 3 = 576
-
-    따라서 내부 acc/sum은 64-bit로 확장.
-*/
-reg signed [63:0] acc;
-reg signed [63:0] acc_result;
-reg signed [63:0] acc_sum_reg;
+reg signed [47:0] acc;
+reg signed [47:0] acc_result;
 
 ////////////////////////////////////////////////////////////
 // Weight / bias address
@@ -134,17 +137,9 @@ wire signed [15:0] w2;
 wire signed [15:0] w3;
 
 wire signed [15:0] bias;
+wire signed [47:0] bias_ext;
 
-/*
-    bias는 Q8.8.
-    acc는 Q16.16.
-    따라서 bias를 << 8 해서 Q16.16으로 맞춘 뒤 더한다.
-*/
-wire signed [63:0] bias_aligned;
-wire signed [63:0] shifted_result;
-
-assign bias_aligned = {{40{bias[15]}}, bias, 8'd0};
-assign shifted_result = acc_result >>> 8;
+assign bias_ext = {{32{bias[15]}}, bias};
 
 weight_rom_conv3_b0 u_wrom0 (
     .clk(clk),
@@ -194,34 +189,23 @@ wire signed [47:0] pe1_comb;
 wire signed [47:0] pe2_comb;
 wire signed [47:0] pe3_comb;
 
-wire signed [63:0] pe0_ext;
-wire signed [63:0] pe1_ext;
-wire signed [63:0] pe2_ext;
-wire signed [63:0] pe3_ext;
+reg signed [47:0] pe0_reg;
+reg signed [47:0] pe1_reg;
+reg signed [47:0] pe2_reg;
+reg signed [47:0] pe3_reg;
 
-reg signed [63:0] pe0_reg;
-reg signed [63:0] pe1_reg;
-reg signed [63:0] pe2_reg;
-reg signed [63:0] pe3_reg;
+reg signed [47:0] sum01_reg;
+reg signed [47:0] sum23_reg;
+reg signed [47:0] group_sum_reg;
 
-reg signed [63:0] sum01_reg;
-reg signed [63:0] sum23_reg;
-reg signed [63:0] group_sum_reg;
-
-wire signed [63:0] acc_plus_group;
-
-assign pe0_ext = {{16{pe0_comb[47]}}, pe0_comb};
-assign pe1_ext = {{16{pe1_comb[47]}}, pe1_comb};
-assign pe2_ext = {{16{pe2_comb[47]}}, pe2_comb};
-assign pe3_ext = {{16{pe3_comb[47]}}, pe3_comb};
+wire signed [47:0] acc_plus_group;
+reg signed [47:0] acc_sum_reg;
 
 assign acc_plus_group = acc + group_sum_reg;
 
 ////////////////////////////////////////////////////////////
 // PE
-// pe32x16_comb 수정 후:
-//     out = a * b
-//     out = Q16.16 raw product
+// pe32x16_comb: out = (a*b) >>> 8
 ////////////////////////////////////////////////////////////
 pe32x16_comb u_pe0 (
     .a(pe_a0_reg),
@@ -285,9 +269,9 @@ always @(posedge clk or posedge rst) begin
         out_ch <= 7'd0;
         group_idx <= 8'd0;
 
-        acc <= 64'sd0;
-        acc_result <= 64'sd0;
-        acc_sum_reg <= 64'sd0;
+        acc <= 48'sd0;
+        acc_result <= 48'sd0;
+        acc_sum_reg <= 48'sd0;
 
         pe_a0_reg <= 32'sd0;
         pe_a1_reg <= 32'sd0;
@@ -299,14 +283,14 @@ always @(posedge clk or posedge rst) begin
         pe_b2_reg <= 16'sd0;
         pe_b3_reg <= 16'sd0;
 
-        pe0_reg <= 64'sd0;
-        pe1_reg <= 64'sd0;
-        pe2_reg <= 64'sd0;
-        pe3_reg <= 64'sd0;
+        pe0_reg <= 48'sd0;
+        pe1_reg <= 48'sd0;
+        pe2_reg <= 48'sd0;
+        pe3_reg <= 48'sd0;
 
-        sum01_reg <= 64'sd0;
-        sum23_reg <= 64'sd0;
-        group_sum_reg <= 64'sd0;
+        sum01_reg <= 48'sd0;
+        sum23_reg <= 48'sd0;
+        group_sum_reg <= 48'sd0;
 
         out <= 32'sd0;
         valid_out <= 1'b0;
@@ -324,9 +308,8 @@ always @(posedge clk or posedge rst) begin
             S_IDLE: begin
                 out_ch <= 7'd0;
                 group_idx <= 8'd0;
-                acc <= 64'sd0;
-                acc_result <= 64'sd0;
-                acc_sum_reg <= 64'sd0;
+                acc <= 48'sd0;
+                acc_result <= 48'sd0;
 
                 if (start) begin
                     state <= S_CAPTURE;
@@ -343,9 +326,7 @@ always @(posedge clk or posedge rst) begin
                     if ((in_ch == 6'd63) && (k_idx == 4'd8)) begin
                         out_ch <= 7'd0;
                         group_idx <= 8'd0;
-                        acc <= 64'sd0;
-                        acc_result <= 64'sd0;
-                        acc_sum_reg <= 64'sd0;
+                        acc <= 48'sd0;
                         state <= S_PREP;
                     end
                 end
@@ -355,9 +336,8 @@ always @(posedge clk or posedge rst) begin
             // Prepare one output channel
             //////////////////////////////////////////////////
             S_PREP: begin
-                acc <= 64'sd0;
-                acc_result <= 64'sd0;
-                acc_sum_reg <= 64'sd0;
+                acc <= 48'sd0;
+                acc_result <= 48'sd0;
                 group_idx <= 8'd0;
                 state <= S_ISSUE;
             end
@@ -366,6 +346,7 @@ always @(posedge clk or posedge rst) begin
             // Issue synchronous read address to:
             // - win_bank0~3
             // - weight_rom_conv3_b0~3
+            //
             // Data becomes available after this clock edge.
             //////////////////////////////////////////////////
             S_ISSUE: begin
@@ -393,10 +374,10 @@ always @(posedge clk or posedge rst) begin
             // Register PE outputs
             //////////////////////////////////////////////////
             S_MUL: begin
-                pe0_reg <= pe0_ext;
-                pe1_reg <= pe1_ext;
-                pe2_reg <= pe2_ext;
-                pe3_reg <= pe3_ext;
+                pe0_reg <= pe0_comb;
+                pe1_reg <= pe1_comb;
+                pe2_reg <= pe2_comb;
+                pe3_reg <= pe3_comb;
 
                 state <= S_SUM1;
             end
@@ -440,21 +421,21 @@ always @(posedge clk or posedge rst) begin
             // Add bias separately to reduce critical path
             //////////////////////////////////////////////////
             S_BIAS: begin
-                acc_result <= acc_sum_reg + bias_aligned;
+                acc_result <= acc_sum_reg + bias_ext;
                 state <= S_OUTPUT;
             end
 
             //////////////////////////////////////////////////
-            // Final shift, ReLU, output
+            // ReLU and output
             //////////////////////////////////////////////////
             S_OUTPUT: begin
                 valid_out <= 1'b1;
 
-                if (shifted_result < 64'sd0) begin
+                if (acc_result[47] == 1'b1) begin
                     out <= 32'sd0;
                 end
                 else begin
-                    out <= shifted_result[31:0];
+                    out <= acc_result[31:0];
                 end
 
                 if (out_ch == OUT_CH_LAST) begin
