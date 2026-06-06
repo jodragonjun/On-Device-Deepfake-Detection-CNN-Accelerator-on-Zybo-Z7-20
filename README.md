@@ -19,23 +19,24 @@
 
 ## Overview
 
-This project implements an end-to-end FPGA-based deepfake image classification accelerator on the **Digilent Zybo Z7-20** board.
+This project implements an FPGA-based deepfake image classification accelerator targeting the **Digilent Zybo Z7-20** board.
 
-A lightweight CNN model is trained in Python using the **WildDeepfake** dataset, quantized into fixed-point representation, exported as hardware-readable HEX files, and reconstructed as a fully synthesizable **Verilog-2001 RTL** design.
+A lightweight CNN model is trained using the **WildDeepfake** dataset, converted into fixed-point representation, exported as hardware-readable parameter files, and reconstructed as a synthesizable **Verilog-2001 RTL** design.
 
-The objective of this project is not simply to run a neural network model, but to demonstrate the complete transition from a software-trained CNN into a hardware-oriented inference accelerator.
+The objective of this project is not simply to run a neural network model.  
+The main objective is to demonstrate how a trained CNN can be transformed into a deterministic FPGA inference accelerator through fixed-point arithmetic, modular RTL design, layer-wise verification, and board-level testing.
 
-This repository documents the full flow:
+This repository focuses on the hardware implementation flow:
 
 ```text
-Dataset
-  -> Python CNN Training
+WildDeepfake Dataset
+  -> CNN Training / Preprocessing
   -> Fixed-Point Quantization
   -> Weight / Bias HEX Export
-  -> Verilog RTL CNN Accelerator
+  -> Verilog-2001 RTL CNN Accelerator
   -> Python Golden Reference Verification
   -> Vivado Synthesis / Implementation
-  -> Zybo Z7-20 FPGA Deployment
+  -> Zybo Z7-20 FPGA Test
 ```
 
 ---
@@ -54,7 +55,8 @@ Cloud-based deepfake detection can provide high accuracy, but it introduces seve
 
 This project explores deepfake detection from an **on-device hardware acceleration** perspective.
 
-Instead of sending facial images to an external server, the inference path is mapped directly into FPGA logic. The goal is to build a lightweight and deterministic CNN accelerator that can classify real and fake facial images inside the device.
+Instead of sending facial images to an external server, the inference path is mapped directly into FPGA logic.  
+The goal is to build a lightweight and deterministic CNN accelerator that can classify real and fake facial images inside the device.
 
 ---
 
@@ -62,11 +64,11 @@ Instead of sending facial images to an external server, the inference path is ma
 
 - Lightweight CNN for real/fake deepfake image classification
 - FPGA-oriented model structure designed for RTL implementation
-- Verilog-2001 only, without SystemVerilog syntax
+- Verilog-2001 RTL only
+- No SystemVerilog syntax
 - Fixed-point inference based on Q-format arithmetic
-- Layer-wise RTL reconstruction of Python-trained CNN
-- Modular hierarchy with separated datapath and control logic
-- FSM-based layer control
+- Modular RTL hierarchy
+- FSM-based control
 - PE-array based convolution datapath
 - Streaming-style feature-map movement
 - Python golden-reference based verification
@@ -139,51 +141,32 @@ The RTL accelerator is designed as a hierarchical CNN inference engine.
 ```text
 cnn_full_inference_top
 │
-├── Feature Extractor
-│   ├── Conv1 Top
-│   │   ├── Address Generator
-│   │   ├── Weight ROM
-│   │   ├── Bias ROM
-│   │   ├── PE Array
-│   │   ├── Accumulator
-│   │   └── ReLU / Output Control
-│   │
+├── Feature Extraction Path
+│   ├── Conv1
+│   ├── ReLU
 │   ├── MaxPool1
-│   │
-│   ├── Conv2 Top
-│   │   ├── Address Generator
-│   │   ├── Weight ROM
-│   │   ├── Bias ROM
-│   │   ├── PE Array
-│   │   ├── Accumulator
-│   │   └── ReLU / Output Control
-│   │
+│   ├── Conv2
+│   ├── ReLU
 │   ├── MaxPool2
-│   │
-│   ├── Conv3 Top
-│   │   ├── Address Generator
-│   │   ├── Weight ROM
-│   │   ├── Bias ROM
-│   │   ├── PE Array
-│   │   ├── Accumulator
-│   │   └── ReLU / Output Control
-│   │
+│   ├── Conv3
+│   ├── ReLU
 │   └── MaxPool3
 │
-├── Classifier Tail
+├── Classifier Path
 │   ├── Global Average Pooling
-│   ├── Dense1
+│   ├── Dense1 + ReLU
 │   ├── Dense2
 │   └── Prediction Logic
 │
-└── Control / Status Logic
+└── Control / Status Path
     ├── FSM Control
     ├── Valid Signal Control
     ├── Done / Busy Status
-    └── Output Register Interface
+    └── LED / Output Status Logic
 ```
 
-Each layer is separated into independent RTL modules. This structure improves readability, verification, debugging, and future scalability.
+Each layer is separated into independent RTL modules.  
+This structure improves readability, verification, debugging, and future scalability.
 
 ---
 
@@ -197,13 +180,13 @@ For each output feature value, the accelerator performs:
 output = ReLU( sum(input_feature x weight) + bias )
 ```
 
-The convolution datapath consists of:
+The convolution datapath consists of the following modules:
 
 1. **Address Generator**  
    Generates feature-map and weight addresses based on output row, column, channel, input channel, and kernel index.
 
 2. **Weight ROM / Bias ROM**  
-   Stores trained parameters exported from Python in HEX format.
+   Stores trained parameters exported from the Python model in hardware-readable format.
 
 3. **PE Module**  
    Multiplies one feature value and one weight value.
@@ -218,7 +201,7 @@ The convolution datapath consists of:
    Adjusts fixed-point scale and applies activation.
 
 7. **Valid Output Logic**  
-   Ensures that output data and metadata are aligned with the correct valid timing.
+   Aligns output data, metadata, and valid timing.
 
 ---
 
@@ -228,7 +211,8 @@ This design uses a **PE-array based convolution structure**, not a full conventi
 
 A traditional systolic array usually transfers activation and weight data between neighboring PEs every cycle, reusing data through a regular spatial dataflow.
 
-In this project, feature and weight data are supplied by address generators and ROM/buffer structures. The PE array performs parallel multiplication, and the accumulator performs reduction.
+In this project, feature and weight data are supplied by address generators and ROM/buffer structures.  
+The PE array performs parallel multiplication, and the accumulator performs reduction.
 
 Therefore, the most accurate description of this design is:
 
@@ -236,7 +220,7 @@ Therefore, the most accurate description of this design is:
 PE-array based streaming convolution accelerator
 ```
 
-or
+or:
 
 ```text
 systolic-style PE array convolution datapath
@@ -307,7 +291,8 @@ Using fixed-point arithmetic enables:
 
 The RTL design is verified using a Python golden-reference flow.
 
-For each stage, Python generates the expected output using the same fixed-point arithmetic policy. The Verilog simulation output is then compared against the Python reference.
+For each stage, Python generates the expected output using the same fixed-point arithmetic policy.  
+The Verilog simulation output is then compared against the Python reference.
 
 Verification checks include:
 
@@ -359,8 +344,8 @@ Representative implementation result:
 
 ```text
 Timing closure achieved
-WNS  > 0
-TNS  = 0
+WNS > 0
+TNS = 0
 Failing endpoints = 0
 ```
 
@@ -428,39 +413,119 @@ This result demonstrates that the Python-trained lightweight CNN can be reconstr
 
 ## Current Repository Structure
 
+This repository is currently organized around RTL source files, testbenches, dataset samples, and hardware test data.
+
 ```text
 On-Device-Deepfake-Detection-CNN-Accelerator-on-Zybo-Z7-20/
 │
 ├── README.md
 │
 ├── rtl/
-│   ├── top/
 │   ├── common/
 │   ├── conv/
-│   ├── pool/
-│   ├── gap/
 │   ├── dense/
 │   ├── memory/
-│   ├── control/
-│   └── interface/
+│   ├── pe/
+│   ├── pool/
+│   └── top/
+│
+├── RTL/ led_output/
+│   └── LED / board-status related RTL files
 │
 ├── tb/
-│   └── testbench files
+│   └── Verilog testbench files
 │
 ├── data/
-│   ├── input hex files
-│   ├── weight hex files
-│   ├── bias hex files
-│   └── expected output files
+│   └── HEX files, parameters, sample input/output data
 │
-├── dataset_sample/
-│   └── sample images or sample input data
-│
-└── RTL_led_output/
-    └── board-level LED output related RTL
+└── dataset_sample/
+    └── Small dataset samples for demonstration or test reference
 ```
 
-The repository is organized around RTL implementation, simulation testbenches, hardware-readable data files, and board-level output logic.
+The current structure intentionally keeps the main hardware design under `rtl/`, while testbenches and test data are separated into `tb/` and `data/`.
+
+The `RTL/ led_output/` directory is maintained as a board-output/status related folder for the current repository state.
+
+---
+
+## RTL Module Organization
+
+The RTL design is organized by function.
+
+```text
+rtl/
+│
+├── top/
+│   ├── cnn_full_inference_top.v
+│   ├── cnn_wrap.v
+│   ├── conv1_pool1_top.v
+│   ├── conv1_pool1_conv2_top.v
+│   ├── conv1_pool1_conv2_pool2_top.v
+│   ├── conv1_pool1_conv2_pool2_conv3_pool3_top.v
+│   ├── gap_dense_top.v
+│   └── status/control related top modules
+│
+├── conv/
+│   ├── conv1_top.v
+│   ├── conv1_layer_top.v
+│   ├── conv1_fsm.v
+│   ├── addr_gen_conv1.v
+│   ├── window_gen_3x3_64.v
+│   ├── accumulator.v
+│   ├── conv2_top.v
+│   ├── conv2_accumulator.v
+│   ├── conv2_window_serializer.v
+│   ├── conv3_top.v
+│   ├── conv3_window_serializer.v
+│   └── conv3_roms.v
+│
+├── pool/
+│   ├── maxpool1_stream.v
+│   ├── maxpool2_stream.v
+│   ├── maxpool3_stream.v
+│   ├── pool1_window_reader.v
+│   ├── pool2_window_reader.v
+│   ├── pool1_fmap_ram.v
+│   └── pool2_fmap_ram.v
+│
+├── dense/
+│   ├── dense1_128x64_relu.v
+│   ├── dense2_64x1.v
+│   ├── dense1_weight_rom.v
+│   ├── dense1_bias_rom.v
+│   ├── dense2_weight_rom.v
+│   └── dense2_bias_rom.v
+│
+├── memory/
+│   ├── image_mem_3ch_64x64.v
+│   ├── weight_rom_conv1.v
+│   ├── weight_rom_conv2.v
+│   ├── bias_rom_conv1.v
+│   ├── bias_rom_conv2.v
+│   └── bias_rom_conv3.v
+│
+├── pe/
+│   ├── pe.v
+│   ├── pe_array4.v
+│   ├── pe_array4_32x16.v
+│   ├── pe32x16.v
+│   └── pe32x16_comb.v
+│
+└── common/
+    ├── relu.v
+    ├── global_avg_pool_6x6_128.v
+    └── signed_div_const36_seq.v
+```
+
+Some module locations may be adjusted as the repository is cleaned further, but the current design is organized around the same functional hierarchy:
+
+```text
+Top
+  -> Conv / Pool Feature Extractor
+  -> GAP / Dense Classifier
+  -> PE / Memory / Common Utility Modules
+  -> Testbench and Data
+```
 
 ---
 
@@ -468,7 +533,8 @@ The repository is organized around RTL implementation, simulation testbenches, h
 
 This project follows a hardware-first design philosophy.
 
-The CNN model was not treated as a black-box software model. Instead, each layer was reconstructed into RTL modules with explicit control, memory access, fixed-point arithmetic, and cycle-level verification.
+The CNN model was not treated as a black-box software model.  
+Instead, each layer was reconstructed into RTL modules with explicit control, memory access, fixed-point arithmetic, and cycle-level verification.
 
 The design prioritizes:
 
@@ -533,6 +599,7 @@ Planned improvements include:
 - Higher-resolution input experiment
 - Cross-domain evaluation using FaceForensics++
 - FPS/Watt measurement on FPGA board
+- Repository documentation expansion with `docs/`, `vivado/`, and `board_test/` folders
 
 ---
 
@@ -550,6 +617,7 @@ Planned improvements include:
 | DSP | FPGA arithmetic block for multiplication/MAC |
 | Q8.8 | 16-bit fixed-point format with 8 fractional bits |
 | AXI-Lite | Lightweight control bus between PS and PL |
+| UART | Serial communication interface used for board-level testing |
 | Golden Reference | Software-generated expected result for RTL verification |
 | Timing Closure | Meeting target clock timing constraints |
 
