@@ -36,7 +36,7 @@ Dataset
   -> Python Golden Reference Verification
   -> Vivado Synthesis / Implementation
   -> Zybo Z7-20 FPGA Deployment
-
+```
   Project Motivation
 
 Deepfake media has become increasingly realistic and accessible due to the rapid development of generative AI.
